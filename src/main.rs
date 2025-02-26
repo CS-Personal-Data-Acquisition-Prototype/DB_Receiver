@@ -1,5 +1,5 @@
-use std::net::{TcpListener, TcpStream};
-use std::io::{BufRead, BufReader};
+use std::net::{TcpListener, TcpStream, Shutdown};
+use std::io::{self, BufRead, BufReader, ErrorKind};
 use rusqlite::{Connection, params};
 use std::error::Error;
 use std::thread;
@@ -10,6 +10,7 @@ use ctrlc;
 fn main() -> Result<(), Box<dyn Error>> {
     // 1. Start listening on port 9000
     let listener = TcpListener::bind("0.0.0.0:9000")?;
+    listener.set_nonblocking(true)?;
     println!("Server listening on port 9000...");
     
     // 2. Open or create a local database
@@ -49,11 +50,19 @@ fn main() -> Result<(), Box<dyn Error>> {
         *running = false;
     })?;
 
+    // Track client threads
+    let mut client_threads = Vec::new();
+
     // 3. Accept incoming connections
     while *running.lock().unwrap() {
         match listener.accept() {
             Ok((stream, addr)) => {
                 println!("Client connected: {:?}", addr);
+                
+                // Make the client stream blocking for reliable data transfer
+                stream.set_nonblocking(false).unwrap_or_else(|e| {
+                    eprintln!("Warning: Could not set client socket to blocking mode: {}", e);
+                });
                 
                 // Open a new database connection for this thread
                 let thread_conn = match Connection::open("received_data.db") {
@@ -65,30 +74,47 @@ fn main() -> Result<(), Box<dyn Error>> {
                 };
                 
                 // Handle each client in a separate thread
-                thread::spawn(move || {
+                let handle = thread::spawn(move || {
                     if let Err(e) = handle_client(stream, &thread_conn) {
                         eprintln!("Error handling client {}: {}", addr, e);
                     }
                     println!("Connection from {} ended", addr);
                 });
+                
+                client_threads.push(handle);
+                
+                // Clean up completed threads
+                client_threads.retain(|h| !h.is_finished());
             }
             Err(e) => {
-                eprintln!("Connection error: {}", e);
-                // Brief pause before trying again
-                thread::sleep(Duration::from_millis(100));
+                if e.kind() == io::ErrorKind::WouldBlock {
+                    // No connection available, sleep briefly and check running flag
+                    thread::sleep(Duration::from_millis(100));
+                } else {
+                    eprintln!("Connection error: {}", e);
+                    thread::sleep(Duration::from_millis(100));
+                }
             }
         }
     }
 
-    println!("Server shutting down...");
+    println!("Server shutting down... waiting for client connections to finish");
+    
+    // Wait for active client threads to complete (optional timeout could be added)
+    for handle in client_threads {
+        let _ = handle.join();
+    }
+
+    println!("Server shutdown complete");
     Ok(())
 }
 
-fn handle_client(stream: TcpStream, conn: &Connection) -> Result<(), Box<dyn Error>> {
-    // Set read timeout to detect disconnected clients
+fn handle_client(mut stream: TcpStream, conn: &Connection) -> Result<(), Box<dyn Error>> {
+    // Set read timeout instead of using non-blocking mode
     stream.set_read_timeout(Some(Duration::from_secs(300)))?; // 5 minutes
     
-    let reader = BufReader::new(stream);
+    // Use larger buffer size
+    let reader = BufReader::with_capacity(8192, stream);
 
     // Process each line as one CSV record
     for line in reader.lines() {
@@ -99,6 +125,9 @@ fn handle_client(stream: TcpStream, conn: &Connection) -> Result<(), Box<dyn Err
                 if line.is_empty() {
                     continue;
                 }
+                
+                // Debug output to see what's being received
+                println!("Received data: {}", line);
                 
                 // Expect 15 comma-separated fields
                 let fields: Vec<&str> = line.split(',').collect();
@@ -149,8 +178,12 @@ fn handle_client(stream: TcpStream, conn: &Connection) -> Result<(), Box<dyn Err
             },
             Err(e) => {
                 // Handle connection errors
-                if e.kind() == std::io::ErrorKind::TimedOut {
+                if e.kind() == ErrorKind::TimedOut {
                     continue; // Just a timeout, keep waiting
+                } else if e.kind() == ErrorKind::WouldBlock {
+                    // No data available right now, wait briefly
+                    thread::sleep(Duration::from_millis(10));
+                    continue;
                 } else {
                     // Client disconnected or other error
                     println!("Client disconnected: {}", e);

@@ -13,6 +13,7 @@ config.rs
 
 # Rust build artifacts
 /target/
+/target
 Cargo.lock
 **/*.rs.bk
 

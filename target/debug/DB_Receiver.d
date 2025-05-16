@@ -1,1 +1,1 @@
-/Users/brad/Library/Mobile\ Documents/com~apple~CloudDocs/OSU/Capstone/DB_Receiver/target/debug/DB_Receiver: /Users/brad/Library/Mobile\ Documents/com~apple~CloudDocs/OSU/Capstone/DB_Receiver/src/main.rs
+/Users/brad/Library/Mobile\ Documents/com~apple~CloudDocs/OSU/Capstone/DB_Receiver/target/debug/db_receiver: /Users/brad/Library/Mobile\ Documents/com~apple~CloudDocs/OSU/Capstone/DB_Receiver/src/main.rs

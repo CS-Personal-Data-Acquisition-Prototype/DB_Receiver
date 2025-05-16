@@ -6,6 +6,44 @@ use std::thread;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use ctrlc;
+use serde::{Deserialize, Serialize};
+use serde_json;
+use std::time::SystemTime;
+
+// Define struct to match the expected JSON structure
+#[derive(Serialize, Deserialize, Debug)]
+struct SensorData {
+    sessionID: Option<i32>,
+    timestamp: String,
+    latitude: f64,
+    longitude: f64,
+    altitude: f64,
+    accel_x: f64,
+    accel_y: f64,
+    accel_z: f64,
+    gyro_x: f64,
+    gyro_y: f64,
+    gyro_z: f64,
+    dac_1: f64,
+    dac_2: f64,
+    dac_3: f64,
+    dac_4: f64,
+}
+
+// Struct for keepalive messages
+#[derive(Serialize, Deserialize, Debug)]
+struct KeepaliveMessage {
+    #[serde(rename = "type")]
+    message_type: String,
+}
+
+// Enum to handle different message types
+#[derive(Debug)]
+enum Message {
+    SensorData(SensorData),
+    Keepalive,
+    Unknown,
+}
 
 fn main() -> Result<(), Box<dyn Error>> {
     // 1. Start listening on port 9000
@@ -116,7 +154,7 @@ fn handle_client(mut stream: TcpStream, conn: &Connection) -> Result<(), Box<dyn
     // Use larger buffer size
     let reader = BufReader::with_capacity(8192, stream);
 
-    // Process each line as one CSV record
+    // Process each line as one JSON record
     for line in reader.lines() {
         match line {
             Ok(line) => {
@@ -129,51 +167,45 @@ fn handle_client(mut stream: TcpStream, conn: &Connection) -> Result<(), Box<dyn
                 // Debug output to see what's being received
                 println!("Received data: {}", line);
                 
-                // Expect 15 comma-separated fields
-                let fields: Vec<&str> = line.split(',').collect();
-                if fields.len() < 15 {
-                    eprintln!("Received incomplete data: {}", line);
-                    continue;
+                // First check if the line contains "keepalive" before attempting to parse
+                if line.contains("\"type\":\"keepalive\"") {
+                    println!("Received keepalive message");
+                    continue; // Skip further processing for this line
                 }
-
-                // Parse each field
-                let session_id = if fields[0] == "None" {
-                    None
-                } else {
-                    fields[0].parse::<i32>().ok()
-                };
-                let timestamp = fields[1];
-                let latitude = fields[2].parse::<f64>().unwrap_or(0.0);
-                let longitude = fields[3].parse::<f64>().unwrap_or(0.0);
-                let altitude = fields[4].parse::<f64>().unwrap_or(0.0);
-                let accel_x = fields[5].parse::<f64>().unwrap_or(0.0);
-                let accel_y = fields[6].parse::<f64>().unwrap_or(0.0);
-                let accel_z = fields[7].parse::<f64>().unwrap_or(0.0);
-                let gyro_x = fields[8].parse::<f64>().unwrap_or(0.0);
-                let gyro_y = fields[9].parse::<f64>().unwrap_or(0.0);
-                let gyro_z = fields[10].parse::<f64>().unwrap_or(0.0);
-                let dac_1 = fields[11].parse::<f64>().unwrap_or(0.0);
-                let dac_2 = fields[12].parse::<f64>().unwrap_or(0.0);
-                let dac_3 = fields[13].parse::<f64>().unwrap_or(0.0);
-                let dac_4 = fields[14].parse::<f64>().unwrap_or(0.0);
-
-                // Insert into the database, with error handling
-                if let Err(e) = conn.execute(
-                    "INSERT INTO sensor_data (
-                        sessionID, timestamp, latitude, longitude, altitude,
-                        accel_x, accel_y, accel_z, 
-                        gyro_x, gyro_y, gyro_z,
-                        dac_1, dac_2, dac_3, dac_4
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                    params![
-                        session_id, timestamp, latitude, longitude, altitude,
-                        accel_x, accel_y, accel_z, 
-                        gyro_x, gyro_y, gyro_z,
-                        dac_1, dac_2, dac_3, dac_4
-                    ],
-                ) {
-                    eprintln!("Database error: {}", e);
-                    // Continue processing instead of returning error
+                
+                // Try to parse as sensor data
+                match serde_json::from_str::<SensorData>(&line) {
+                        Ok(data) => {
+                            // Additional validation - skip if timestamp is "keepalive"
+                            if data.timestamp == "keepalive" || data.timestamp.contains("keepalive") {
+                                println!("Detected keepalive disguised as sensor data");
+                                continue;
+                            }
+                                                        
+                            // Insert into the database
+                            if let Err(e) = conn.execute(
+                                "INSERT INTO sensor_data (
+                                    sessionID, timestamp, latitude, longitude, altitude,
+                                    accel_x, accel_y, accel_z, 
+                                    gyro_x, gyro_y, gyro_z,
+                                    dac_1, dac_2, dac_3, dac_4
+                                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                                params![
+                                    data.sessionID, data.timestamp, data.latitude, data.longitude, data.altitude,
+                                    data.accel_x, data.accel_y, data.accel_z, 
+                                    data.gyro_x, data.gyro_y, data.gyro_z,
+                                    data.dac_1, data.dac_2, data.dac_3, data.dac_4
+                                ],
+                            ) {
+                                eprintln!("Database error: {}", e);
+                            } else {
+                                println!("Data successfully inserted into database");
+                            }
+                        },
+                    Err(e) => {
+                        eprintln!("JSON parsing error: {}", e);
+                        eprintln!("Invalid JSON data: {}", line);
+                    }
                 }
             },
             Err(e) => {

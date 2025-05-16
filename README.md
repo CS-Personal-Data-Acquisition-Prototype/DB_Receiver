@@ -6,7 +6,7 @@ A TCP server application that receives sensor data from remote clients (like Ras
 
 This application acts as a data collection endpoint for IoT or sensor systems. It:
 - Listens for TCP connections on port 9000
-- Receives CSV-formatted sensor data from connected clients
+- Receives JSON-formatted sensor data from connected clients
 - Parses the data and stores it in a SQLite database
 - Handles multiple concurrent client connections
 - Provides graceful shutdown with Ctrl+C
@@ -81,22 +81,26 @@ The application creates a `sensor_data` table with the following schema:
 
 - **Protocol**: TCP
 - **Port**: 9000
-- **Data Format**: CSV with 15 fields in the following order:
-  1. Session ID (integer or "None")
-  2. Timestamp (string)
-  3. Latitude (float)
-  4. Longitude (float)
-  5. Altitude (float)
-  6. Accelerometer X (float)
-  7. Accelerometer Y (float)
-  8. Accelerometer Z (float)
-  9. Gyroscope X (float)
-  10. Gyroscope Y (float)
-  11. Gyroscope Z (float)
-  12. DAC Channel 1 (float)
-  13. DAC Channel 2 (float)
-  14. DAC Channel 3 (float)
-  15. DAC Channel 4 (float)
+- **Data Format**: JSON with the following structure:
+  ```json
+  {
+    "sessionID": 1,            // Integer or null
+    "timestamp": "2023-01-01T12:00:00",
+    "latitude": 0.0,
+    "longitude": 0.0,
+    "altitude": 0.0,
+    "accel_x": 0.0,
+    "accel_y": 0.0,
+    "accel_z": 0.0,
+    "gyro_x": 0.0,
+    "gyro_y": 0.0,
+    "gyro_z": 0.0,
+    "dac_1": 0.0,
+    "dac_2": 0.0,
+    "dac_3": 0.0,
+    "dac_4": 0.0
+  }
+  ```
 
 ## Testing with Raspberry Pi
 
@@ -104,13 +108,14 @@ To test data transfer from a Raspberry Pi:
 
 1. Ensure the Pi and the machine running this server are on the same network
 2. Configure your Pi application to send data to the server's IP address on port 9000
-3. Format the data as CSV according to the specification above
-4. Each line sent should contain one complete data record
+3. Format the data as JSON according to the specification above
+4. Each line sent should contain one complete JSON object
 
 Example Python code for the Raspberry Pi client:
 
 ```python
 import socket
+import json
 import time
 
 # Replace with your server's IP address
@@ -118,17 +123,31 @@ SERVER_IP = '192.168.1.100'
 SERVER_PORT = 9000
 
 # Sample data
-session_id = 1
-timestamp = "2023-01-01T12:00:00"
-# Add your sensor readings here
+data = {
+    "sessionID": 1,
+    "timestamp": "2023-01-01T12:00:00",
+    "latitude": 0.0,
+    "longitude": 0.0,
+    "altitude": 0.0,
+    "accel_x": 0.0,
+    "accel_y": 0.0,
+    "accel_z": 0.0,
+    "gyro_x": 0.0,
+    "gyro_y": 0.0,
+    "gyro_z": 0.0,
+    "dac_1": 0.0,
+    "dac_2": 0.0,
+    "dac_3": 0.0,
+    "dac_4": 0.0
+}
 
 # Create a TCP connection
 with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
     s.connect((SERVER_IP, SERVER_PORT))
     
-    # Format data as CSV and send
-    data = f"{session_id},{timestamp},0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0\n"
-    s.sendall(data.encode())
+    # Convert to JSON and send
+    json_data = json.dumps(data) + "\n"  # Add newline for line-by-line processing
+    s.sendall(json_data.encode())
     
     # Wait to ensure data is sent
     time.sleep(1)
